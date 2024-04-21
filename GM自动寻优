@@ -1,0 +1,211 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import math as mt
+
+
+#进行光滑比检验
+def smoothness_check(data):
+    X0 = np.array(data)
+    X1 = X0.cumsum()
+    rho = [X0[i] / X1[i - 1] for i in range(1, len(X0))]
+    rho_ratio = [rho[i + 1] / rho[i] for i in range(len(rho) - 1)]
+    print("rho:", rho)
+    print("rho比率:", rho_ratio)
+
+    flag = True
+    for i in range(1, len(rho) - 1):
+        if rho[i] > 0.5 or rho[i + 1] / rho[i] >= 1:
+            flag = False
+            break
+    if rho[-1] > 0.5:
+        flag = False
+
+    if flag:
+        print("数据通过光滑校验")
+    else:
+        print("该数据未通过光滑校验")
+
+    return flag
+#级比检验
+def level_ratio_test(data):
+    X0 = data
+    for i in range(len(X0) - 1):
+        l = X0[i] / X0[i + 1]
+        if l <= mt.exp(-2 / (len(X0) + 1)) or l >= mt.exp(2 / (len(X0) + 1)):
+            return False
+    if i == len(X0) - 2 and mt.exp(-2 / (len(X0) + 1)) < l < mt.exp(2 / (len(X0) + 1)):
+        print('级比检验通过')
+        return True
+    else:
+        print('级比检验不通过')
+        return False
+
+def level_ratio_test_correction(data):
+    """
+    级比检验不通过时的处理。
+
+    参数:
+    data (list): 需要处理的数据序列。
+
+    返回:
+    tuple: 包含新的原始数列和c的值。
+    """
+    X0 = data
+    j = 1
+    while True:
+        YO = [k + j for k in X0]
+        j += 1
+        for m in range(len(YO) - 1):
+            l = YO[m] / YO[m + 1]
+            if mt.exp(-2 / (len(X0) + 1)) < l < mt.exp(2 / (len(X0) + 1)):
+                b = True
+            else:
+                b = False
+                break
+        if b:
+            print("新的原始数列为：", YO)
+            c = j - 1
+            print("c的值为：", c)
+            return YO, c
+        else:
+            continue
+
+# 示例使用：
+# data = [你的数据序列]
+# if not level_ratio_test(data):
+#     level_ratio_test_correction(data)
+
+# 自动寻优定权的方法选择最佳背景值权重 μ
+def grey_forecast(X0, mu):
+    X1 = np.cumsum(X0)  # 累加生成X^(1)
+    Z1 = (1 - mu) * X1[:-1] + mu * X1[1:]  # 生成Z^(1)，即背景值序列
+    B = np.vstack([-Z1, np.ones(len(Z1))]).T  # 构建矩阵B
+    Y_n = X0[1:]  # 构建向量Y_n，即原始数据序列X^(0)从第二个元素开始的部分
+    A = np.linalg.inv(B.T @ B) @ B.T @ Y_n  # 利用最小二乘法估计参数
+    a, u = A.flatten()  # 提取参数a和u
+
+    # 初始化最小误差和对应的c值
+    min_error = float('inf')
+    optimal_c = None
+    optimal_X1_1 = None
+
+    # 遍历所有可能的初始值来确定常数c
+    for k in range(len(X0)):
+        c_k = X0[k] - u / a
+        X1_hat_k = [(c_k * np.exp(-a * i) + u / a) for i in range(len(X0))]
+        X0_hat_k = [X1_hat_k[0]] + [X1_hat_k[i] - X1_hat_k[i - 1] for i in range(1, len(X1_hat_k))]
+        error = sum((X0[i] - X0_hat_k[i]) ** 2 for i in range(len(X0)))
+
+        # 更新最小误差和对应的c值
+        if error < min_error:
+            min_error = error
+            optimal_c = c_k
+            optimal_X1_1 = X0[k]
+
+    # 使用找到的最优c值来计算预测值
+    X1_hat = [(optimal_c * np.exp(-a * i) + u / a) for i in range(len(X0))]
+    X0_hat = [X1_hat[0]] + [X1_hat[i] - X1_hat[i - 1] for i in range(1, len(X1_hat))]
+
+    return X0_hat, optimal_X1_1, a, u
+
+def calculate_error(X0, GM):
+    X0 = np.array(X0)
+    GM = np.array(GM)
+    error = np.mean(np.abs((X0 - GM) / X0))
+    return error
+
+def calculate_posterior_difference_ratio(X0, GM):
+    X0 = np.array(X0)
+    GM = np.array(GM)
+    S1 = np.var(X0 - GM)
+    S2 = np.var(X0)
+    C = S1 / S2
+    return C
+
+
+def grey(X0, mu, bestchushi, n_predict=0):
+    X1 = np.cumsum(X0)  # 累加生成X^(1)
+    Z1 = (1 - mu) * X1[:-1] + mu * X1[1:]  # 生成Z^(1)，即背景值序列
+    B = np.vstack([-Z1, np.ones(len(Z1))]).T  # 构建矩阵B
+    Y_n = X0[1:]  # 构建向量Y_n，即原始数据序列X^(0)从第二个元素开始的部分
+    A = np.linalg.inv(B.T @ B) @ B.T @ Y_n  # 利用最小二乘法估计参数
+    a, u = A.flatten()  # 提取参数a和u
+    c = bestchushi - u / a
+
+    X1_hat = [(c * np.exp(-a * i) + u / a) for i in range(len(X0) + n_predict)]
+    X0_hat = [X1_hat[0]] + [X1_hat[i] - X1_hat[i - 1] for i in range(1, len(X1_hat))]
+    return X0_hat
+
+
+# 创建一个空的DataFrame，用于存储结果
+columns = ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+index = ["发展系数a", "灰色作用量b", "后验差比C值", "模型平均相对误差", "最佳背景值参数mu", "最佳初始值", "预测值1", "预测值2", "预测值3"]
+results_df = pd.DataFrame(index=index, columns=columns)
+
+# 读取数据
+df = pd.read_excel(".xlsx", sheet_name='Sheet1', index_col='')
+
+# 对每个地区进行预测
+for column in df.columns:
+    print(f"正在对 {column} 地区进行预测...")
+    data = df[column].values[5:]
+
+    # 光滑检验、级数检验与平移变换
+    smoothness_check(data)
+    if not level_ratio_test(data):
+        YO, c = level_ratio_test_correction(data)
+    else:
+        YO = data
+        c = 0
+    level_ratio_test(YO)
+
+    # 寻找最佳mu自动寻优
+    best_mu = 0
+    min_error = float('inf')
+
+    for mu in np.arange(0, 1.001, 0.001):
+        GM, chushi, at, ut = grey_forecast(YO, mu)
+        error = calculate_error(YO, GM)
+        if error < min_error:
+            best_mu = mu
+            min_error = error
+            bestchushi = chushi
+
+    # 使用最佳mu值的改进GM(1,1)模型进行预测
+    GM_optimized, bestchushi, a, u = grey_forecast(YO, best_mu)
+    error = calculate_error(YO, GM_optimized)
+    C = calculate_posterior_difference_ratio(YO, GM_optimized)
+
+    # 填充结果到DataFrame
+    results_df.loc["发展系数a", column] = a
+    results_df.loc["灰色作用量b", column] = u
+    results_df.loc["后验差比C值", column] = C
+    results_df.loc["模型平均相对误差", column] = error
+    results_df.loc["最佳背景值参数mu", column] = best_mu
+    results_df.loc["最佳初始值", column] = bestchushi - c
+
+    # 预测未来三个值
+    predict = grey(YO, best_mu, bestchushi, n_predict=3)
+    predict_p = [g - c for g in predict]  # 只取预测的三个值
+    GM_restored = [g - c for g in predict][-3:]  # 只取预测的三个值
+    for i, val in enumerate(GM_restored, start=1):
+        results_df.loc[f"预测值{i}", column] = val
+
+
+
+    # 绘制原始数据和预测数据的对比图
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(2014, 2020), data, label='Actual')  # 实际值到2019年
+    plt.plot(range(2014, 2023), predict_p, label='Optimized GM(1,1) Forecast')
+    plt.legend()
+    plt.xlabel('Year')
+    plt.ylabel('Value')
+    plt.title(f'{column} - Actual vs Forecast')
+    plt.show()
+
+# 将结果保存到Excel文件中
+results_df.to_excel(".xlsx")
+
+# 打印完成信息
+print("预测完成，结果已保存到Excel文件。")
